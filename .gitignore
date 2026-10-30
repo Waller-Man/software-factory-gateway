@@ -1,0 +1,33 @@
+# Local database configuration and credentials
+.env
+.env.*
+!.env.example
+credentials.json
+credentials.*.json
+*.private.json
+.npmrc
+
+# Dependencies and generated output
+node_modules/
+/lib/
+/artifacts/
+/dist/
+/release/
+/releases/
+*.tsbuildinfo
+*.zip
+*.tgz
+
+# Tests, caches and logs
+test-results/
+coverage/
+.cache/
+*.log
+*.tmp
+
+# Editor and operating system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,21 @@
+{
+  "name": "@software-factory/gateway", "version": "0.1.1", "private": true, "type": "module",
+  "description": "Bounded read-only HugeGraph service, authenticated Remote and Tool for the software factory",
+  "main": "./lib/index.js", "types": "./lib/index.d.ts",
+  "exports": {
+    ".": { "types": "./lib/index.d.ts", "default": "./lib/index.js" },
+    "./types": { "types": "./lib/types.d.ts", "default": "./lib/types.js" },
+    "./client": "./lib/client.js",
+    "./typert": { "types": "./lib/typert.host.d.ts", "default": "./lib/typert.host.js" },
+    "./remote": { "types": "./lib/typert.remote-client.d.ts", "default": "./lib/typert.remote-client.js" },
+    "./locale/*.json": "./locale/*.json", "./icon": "./icon.svg", "./package.json": "./package.json"
+  },
+  "files": ["lib/index.js", "lib/index.d.ts", "lib/types.js", "lib/types.d.ts", "lib/contracts/*", "lib/client.js", "lib/typert.host.js", "lib/typert.host.d.ts", "lib/typert.remote-client.js", "lib/typert.remote-client.d.ts", "cordis.patch.yml", "locale/*.json", "icon.svg", "README.md", "THIRD_PARTY_NOTICES.md", ".env.example", "docs/gateway-api.md"],
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" }, "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-api-gateway", "@deepseek-ai/dsh-client-connection"] } },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.5-alpha.1", "@deepseek-ai/schemastery": "3.18.5-alpha.1",
+    "@deepseek-ai/dsh-tools": "0.2.1-alpha.2", "@deepseek-ai/dsh-typert-protocol": "0.2.1-alpha.2"
+  },
+  "scripts": { "build": "node scripts/build.mjs", "typecheck": "node scripts/check.mjs", "test": "node --experimental-transform-types --test tests/*.test.ts", "pack:bundle": "node scripts/pack.mjs" },
+  "engines": { "node": ">=24" }
+}

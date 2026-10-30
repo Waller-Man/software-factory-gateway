@@ -1,0 +1,5 @@
+- insert:
+    - id: sf-hugegraph-read
+      name: '@software-factory/gateway'
+      config:
+        envFile: '.env'
