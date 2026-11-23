@@ -9,8 +9,8 @@ import { properties, edgeTypes } from '../src/schema.ts';
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 test('published ZIP extracts with an independent ZIP reader and loads outside the development package', async () => {
   const report = JSON.parse(await readFile(join(packageRoot, 'artifacts/package-check.json'), 'utf8'));
-  assert.equal(report.version, '0.1.1'); assert.ok(report.credentialsExcluded);
-  assert.ok(report.files.includes('.env.example') && !report.files.includes('.env'));
+  assert.equal(report.version, '0.1.3'); assert.ok(report.credentialsExcluded);
+  assert.ok(!report.files.some(name => /(^|\/)\.env/.test(name)));
   assert.ok(!report.files.some(name => /(?:check-env-acl|protect-env)\.ps1$/.test(name)));
   const root = resolve(packageRoot, '../../test-results'); await mkdir(root, { recursive: true });
   const scratch = await mkdtemp(join(root, 'standalone-')), zip = join(packageRoot, 'artifacts', report.zip);
@@ -19,7 +19,7 @@ test('published ZIP extracts with an independent ZIP reader and loads outside th
   const plugin = join(scratch, 'software-factory-gateway');
   await assert.rejects(access(join(plugin, '.env'))); await assert.rejects(access(join(plugin, 'node_modules'))); await assert.rejects(access(join(plugin, 'src')));
   const manifest = JSON.parse(await readFile(join(plugin, 'package.json'), 'utf8')); assert.equal(manifest.scripts, undefined);
-  await writeFile(join(plugin, '.env'), 'HUGEGRAPH_BASE_URL=http://127.0.0.1:18080\nHUGEGRAPH_GRAPHSPACE=DEFAULT\nHUGEGRAPH_GRAPH=hugegraph\nHUGEGRAPH_USERNAME=standalone-mock\nHUGEGRAPH_PASSWORD=synthetic-only\n', { mode: 0o600 });
+  await writeFile(join(plugin, '.env'), 'HUGEGRAPH_BASE_URL=https://must-not-be-used.invalid\nHUGEGRAPH_PASSWORD=must-not-be-used\n', { mode: 0o600 });
   const schema = { vertexlabels: Object.entries(properties).map(([name, fields]) => ({ name, properties: fields })), propertykeys: [...new Set(Object.values(properties).flat())].map(name => ({ name, data_type: name === 'display_order' ? 'INT' : 'TEXT', cardinality: 'SINGLE' })), edgelabels: Object.entries(edgeTypes).map(([name, [source_label, target_label]]) => ({ name, source_label, target_label })) };
   await writeFile(join(scratch, 'mock-schema.json'), JSON.stringify(schema));
   const host = resolve(process.env.DSH_SOURCE ?? join(packageRoot, '../../../DSH-Softwarefactory'));

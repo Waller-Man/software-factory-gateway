@@ -31,6 +31,7 @@ function view(v: ReadVertex, detail: 'summary' | 'full', m: ResultMeta): NodeVie
   for (const key of properties[v.label].filter(k => jsonProperties.includes(k))) {
     const parsed = jsonField(v, key); fields[key] = parsed;
     if (parsed.state === 'invalid') warn(m, { code: 'INVALID_JSON', message: 'Original JSON TEXT could not be parsed', vertexId: v.id, field: key });
+    if (key === 'datasets_json' && parsed.state === 'parsed' && !datasetList(parsed.value)) warn(m, { code: 'JSON_SHAPE', message: 'Dataset declaration must be an array of named locations; original JSON is preserved', vertexId: v.id, field: key });
   }
   return { vertexId: v.id, label: v.label, detail, properties: { ...selected }, missingFields: properties[v.label].filter(k => !Object.hasOwn(v.properties, k)), jsonFields: fields };
 }
@@ -79,6 +80,18 @@ function graph(state: GraphState, options: SnapshotOptions, m: ResultMeta, treeO
   return { rootCapabilityId: root.id, nodes, edges, stats: { nodes: nodes.length, edges: edges.length, byLabel, scope: 'returned' } };
 }
 const folded = (s: unknown): string => typeof s === 'string' ? s.trim().toLowerCase() : '';
+function datasetList(value: Json): value is { name: string; local_path?: string; source_url?: string }[] {
+  return Array.isArray(value) && value.every(item => item && typeof item === 'object' && !Array.isArray(item) && typeof item.name === 'string' && !!item.name.trim()
+    && (item.local_path === undefined || typeof item.local_path === 'string') && (item.source_url === undefined || typeof item.source_url === 'string')
+    && (typeof item.local_path === 'string' && !!item.local_path.trim() || typeof item.source_url === 'string' && !!item.source_url.trim()));
+}
+function datasetTokens(v: ReadVertex, m: ResultMeta): { tokens: string[]; unknown: boolean } {
+  const parsed = jsonField(v, 'datasets_json');
+  if (parsed.state === 'missing') return { tokens: [], unknown: false };
+  if (parsed.state === 'parsed' && datasetList(parsed.value)) return { tokens: parsed.value.map(item => item.name), unknown: false };
+  warn(m, { code: parsed.state === 'invalid' ? 'INVALID_JSON' : 'JSON_SHAPE', message: 'Dataset declaration cannot be used for keyword filtering', vertexId: v.id, field: 'datasets_json' });
+  return { tokens: [], unknown: true };
+}
 function modelTokens(v: ReadVertex, m: ResultMeta): { tokens: string[]; models: { name: string; vendor?: string }[]; unknown: boolean } {
   const parsed = jsonField(v, 'model_dependencies_json');
   if (parsed.state === 'missing') return { tokens: [], models: [], unknown: false };
@@ -114,10 +127,10 @@ export class Reader {
     } catch (e) { return { ok: false, error: failure(e, combined) }; }
     finally { this.#active--; }
   }
-  private client(): ReadTransport { requireThat(this.transport, 'CONFIG', this.configFailure ?? 'Fill the plugin .env locally, then re-enable the plugin'); return this.transport; }
+  private client(): ReadTransport { requireThat(this.transport, 'CONFIG', this.configFailure ?? 'Fill the database connection fields in this component configuration'); return this.transport; }
   health(signal?: AbortSignal): Promise<GatewayResult<Health>> {
     return this.run(signal, this.options.healthTimeoutMs, async (s, m) => {
-      const h: Health = { apiVersion: '1.0', gatewayVersion: '0.1.1', ready: false, connection: 'not_checked', schema: 'unknown' };
+      const h: Health = { apiVersion: '1.0', gatewayVersion: '0.1.3', ready: false, connection: 'not_checked', schema: 'unknown' };
       try { await this.client().schema(s); h.ready = true; h.connection = 'reachable'; h.schema = 'compatible'; }
       catch (e) {
         s.throwIfAborted(); const diagnostic = failure(e, s); h.diagnostic = diagnostic;
@@ -135,7 +148,14 @@ export class Reader {
   }
   read(query: ReadQuery, signal?: AbortSignal): Promise<GatewayResult<ReadData>> {
     return this.run(signal, this.options.timeoutMs, async (s, m) => {
-      const q = parseRead(query), state = await this.client().scan(s, q.kind !== 'capability_tree');
+      const q = parseRead(query);
+      if (q.kind === 'factory_config') {
+        const data = await this.client().factoryConfig(s);
+        m.fingerprint = createHash('sha256').update(canonical(data)).digest('hex');
+        if (data.state === 'invalid') warn(m, { ...data.diagnostic, vertexId: data.vertexId, field: 'dataset_root' });
+        return data;
+      }
+      const state = await this.client().scan(s, q.kind !== 'capability_tree');
       m.fingerprint = fingerprint(state, q);
       if ('expectedFingerprint' in q && q.expectedFingerprint) requireThat(q.expectedFingerprint === m.fingerprint, 'DATA_CHANGED', 'Data or query changed; restart pagination');
       if (q.kind === 'capability_tree') return graph(state, q, m, true);
@@ -184,9 +204,9 @@ export class Reader {
           else if (!models.models.some(x => folded(x.name) === folded(q.model!.name) && (!q.model!.vendor || folded(x.vendor) === folded(q.model!.vendor)))) continue;
         }
         if (q.keyword) {
-          const keyword = folded(q.keyword), categories = categoryTokens(v, m);
-          const tokens = [a.properties.agent_id, a.properties.name, a.properties.description, v.properties.description, v.properties.version, v.properties.developer, v.properties.dsh_ref, ...models.tokens, ...categories.tokens];
-          if (!tokens.some(x => folded(x).includes(keyword))) { if (models.unknown || categories.unknown) uncertain = true; else continue; }
+          const keyword = folded(q.keyword), categories = categoryTokens(v, m), datasets = datasetTokens(v, m);
+          const tokens = [a.properties.agent_id, a.properties.name, a.properties.description, v.properties.description, v.properties.version, v.properties.developer, v.properties.dsh_ref, ...models.tokens, ...categories.tokens, ...datasets.tokens];
+          if (!tokens.some(x => folded(x).includes(keyword))) { if (models.unknown || categories.unknown || datasets.unknown) uncertain = true; else continue; }
         }
         if (uncertain) { m.complete = false; m.unknownCount++; if (!m.reasons.includes('filter_unknown')) m.reasons.push('filter_unknown'); continue; }
         rows.push({ agent: a, version: v });

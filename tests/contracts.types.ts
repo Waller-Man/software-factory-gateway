@@ -7,6 +7,10 @@ export async function backend(ctx: Context): Promise<void> {
   const service: HugeGraphReadService = ctx.hugegraphRead;
   const q: ReadQuery = { kind: 'versions', agentId: 'agent:a', detail: 'full' };
   await service.health(); await service.read(q); await service.snapshot({});
+  const config = await service.read({ kind: 'factory_config' });
+  if (config.ok && 'kind' in config.data && config.data.kind === 'factory_config' && config.data.state === 'configured') {
+    const root: string = config.data.datasetRoot; void root;
+  }
 }
 export async function browser(remote: TypertClientRemote): Promise<void> {
   const result = await remote.hugegraphRead.read({ kind: 'field_groups' });

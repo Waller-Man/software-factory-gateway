@@ -55,6 +55,6 @@ const decorators = { name: 'standard-remote-decorators', transform(code, id) {
 } };
 for (const entry of ['typert.host', 'typert.remote-client']) await build({ config: false, entry: { [entry]: join(stage, entry + '.js') }, outDir: join(gateway, 'lib'), platform: 'neutral', format: 'esm', clean: false, dts: false, deps: { onlyBundle: ['zod'] }, outputOptions: { entryFileNames: entry + '.js' } });
 await build({ config: false, entry: { index: join(gateway, 'src/index.ts') }, outDir: join(gateway, 'lib'), platform: 'node', format: 'esm', clean: false, dts: false, deps: { neverBundle: [/^@deepseek-ai\//] }, plugins: [decorators], outputOptions: { entryFileNames: 'index.js' } });
-await build({ config: false, entry: { client: join(gateway, 'src/client.ts') }, outDir: join(gateway, 'lib'), platform: 'browser', format: 'cjs', clean: false, dts: false,
+await build({ config: false, entry: { client: join(gateway, 'src/client.ts') }, outDir: join(gateway, 'lib'), platform: 'browser', format: 'cjs', clean: false, dts: false, deps: { neverBundle: ['react', /^@deepseek-ai\//] },
   outputOptions: { entryFileNames: 'client.js', banner: 'window.__ModuleLoader__.load({id:"@software-factory/gateway",factory:(require)=>{', intro: 'var module={exports:{}};var exports=module.exports;', footer: 'return module.exports;}});' } });
 console.log('Built Gateway Host, generated strict Remote, browser bridge and self-contained types.');

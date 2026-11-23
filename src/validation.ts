@@ -49,6 +49,7 @@ export function parseRead(value: unknown): ReadQuery {
   const v = boundedInput(value);
   const common = ['kind', 'limit', 'offset', 'expectedFingerprint'];
   const allowed: Record<string, string[]> = {
+    factory_config: ['kind'],
     capability_tree: ['kind', 'rootCapabilityId', 'maxDepth', 'maxNodes', 'maxEdges', 'detail'],
     node: [...common, 'vertexId'], agents: [...common, 'agentId', 'capabilityId', 'includeDescendants', 'keyword', 'detail'],
     versions: [...common, 'agentId', 'version', 'detail'],

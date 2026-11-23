@@ -3,7 +3,7 @@ import { GatewayError } from './validation.ts';
 
 export const properties: Record<VertexLabel, readonly string[]> = {
   Capability: ['name'], Agent: ['agent_id', 'name', 'description'],
-  AgentVersion: ['version', 'status', 'description', 'developer', 'invoke_kind', 'dsh_ref', 'performance_evidence_json', 'constraints_json', 'model_dependencies_json', 'selection_policy_json', 'object_categories_json', 'input_schema', 'output_schema', 'intermediate_artifacts_json', 'cost_json', 'effect_json'],
+  AgentVersion: ['version', 'status', 'description', 'developer', 'invoke_kind', 'dsh_ref', 'performance_evidence_json', 'constraints_json', 'model_dependencies_json', 'selection_policy_json', 'object_categories_json', 'input_schema', 'output_schema', 'intermediate_artifacts_json', 'datasets_json', 'cost_json', 'effect_json'],
   FieldGroup: ['group_id', 'name', 'display_order', 'fields_json'],
 };
 export const edgeTypes: Record<EdgeLabel, readonly [VertexLabel, VertexLabel]> = {

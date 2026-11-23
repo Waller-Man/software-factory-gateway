@@ -6,6 +6,7 @@ import type { GraphState, ReadTransport } from '../src/transport.ts';
 import type { Json, ReadQuery, VertexLabel, GatewayResult } from '../src/types.ts';
 import { edgeTypes, properties } from '../src/schema.ts';
 import { parseTool } from '../src/validation.ts';
+import { missingFactoryConfig } from '../src/factory-config.ts';
 
 export function fixture(): GraphState {
   const vertices: GraphState['vertices'] = [
@@ -15,7 +16,7 @@ export function fixture(): GraphState {
     { id: 'native:b', label: 'Agent', properties: { agent_id: 'agent:b', name: '拆分', description: '需求预处理' } },
     { id: 'v:a', label: 'AgentVersion', properties: { version: 'v2.0', status: 'enabled', developer: '甲、乙', invoke_kind: 'dsh_tool', dsh_ref: 'example_tool', input_schema: '{"description":"需求","x-required":true}', output_schema: '{"description":"文档"}', model_dependencies_json: '[{"vendor":"Example","name":"model-a"}]', object_categories_json: '["DOCX"]', intermediate_artifacts_json: '[{"name":"中间材料","extension":"json"}]' } },
     { id: 'v:b', label: 'AgentVersion', properties: { version: '0.2.0', status: 'able', input_schema: '{}', output_schema: '{}', model_dependencies_json: 'broken JSON' } },
-    ...Array.from({ length: 8 }, (_, i) => ({ id: 'g:' + i, label: 'FieldGroup' as VertexLabel, properties: { group_id: 'g' + i, name: '组' + i, display_order: i, fields_json: JSON.stringify(Array.from({ length: i < 3 ? 3 : 2 }, (_, j) => ({ field_id: `f${i}:${j}` }))) } })),
+    ...Array.from({ length: 8 }, (_, i) => ({ id: 'g:' + i, label: 'FieldGroup' as VertexLabel, properties: { group_id: 'g' + i, name: '组' + i, display_order: i, fields_json: JSON.stringify(Array.from({ length: i < 4 ? 3 : 2 }, (_, j) => ({ field_id: `f${i}:${j}` }))) } })),
   ];
   const edges: GraphState['edges'] = [
     { id: 'e:child', label: 'HAS_CHILD', outV: 'root', inV: 'child', outVLabel: 'Capability', inVLabel: 'Capability' },
@@ -32,10 +33,10 @@ export function schema(): unknown {
     edgelabels: Object.entries(edgeTypes).map(([name, [source_label, target_label]]) => ({ name, source_label, target_label })),
   };
 }
-function memory(state = fixture()): ReadTransport { return { schema: async () => {}, scan: async () => structuredClone(state), dispose() {} }; }
+function memory(state = fixture()): ReadTransport { return { schema: async () => {}, factoryConfig: async () => missingFactoryConfig('schema'), scan: async () => structuredClone(state), dispose() {} }; }
 function success<T>(r: GatewayResult<T>): Extract<GatewayResult<T>, { ok: true }> { assert.equal(r.ok, true, JSON.stringify(r)); if (!r.ok) throw new Error('expected success'); return r; }
 
-test('independent version descriptions survive fixed GET reads, keyword filtering and missing fields; nineteen metadata fields are accepted', async () => {
+test('independent version descriptions survive fixed GET reads, keyword filtering and missing fields; twenty metadata fields are accepted', async () => {
   const state = fixture(); state.vertices.find(v => v.id === 'v:a')!.properties.description = '仅此版本支持离线批处理';
   let writes = 0;
   const client = new ReadClient({ baseUrl: 'http://127.0.0.1:18080', graph: 'hugegraph', graphSpace: 'DEFAULT', username: 'synthetic', password: 'synthetic' }, defaultLimits, async (input, init) => {
@@ -132,7 +133,7 @@ test('all service and Tool parsers reject transport/writes/invalid pagination be
   assert.equal(reads, 0);
 });
 test('cancellation, timeout, disposal, BUSY and public byte limit', async () => {
-  const block: ReadTransport = { schema: async () => {}, scan: signal => new Promise((_, reject) => { signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }), dispose() {} };
+  const block: ReadTransport = { schema: async () => {}, factoryConfig: async () => missingFactoryConfig('schema'), scan: signal => new Promise((_, reject) => { signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }), dispose() {} };
   const reader = new Reader(block, undefined, { ...readerDefaults, timeoutMs: 25, maxConcurrent: 1 });
   const waiting = reader.read({ kind: 'agents' });
   const busy = await reader.read({ kind: 'agents' }); assert.ok(!busy.ok && busy.error.code === 'BUSY');

@@ -1,16 +1,16 @@
 # Gateway read API 1.0
 
-状态：2026-10-29，用户已批准方案；实现包packages/gateway，接口类型唯一来源packages/contracts/src/gateway.ts。此文件只定义Gateway，不替其他模块确定执行/写入协议。新增最小根构建配置用于本模块，其他模块接入前由总控协调。
+状态：2026-11-17，用户已批准组件配置及数据集适配；实现包packages/gateway，接口类型唯一来源packages/contracts/src/gateway.ts。此文件只定义Gateway，不替其他模块确定执行/写入协议。原有最小根构建配置继续沿用，共享Gateway DTO本轮仅作追加。
 
 ## 入口与依赖
 
-- 包：@software-factory/gateway 0.1.1，目标DSH 0.2.1-alpha.2；查询API保持1.0。
-- 后端服务：hugegraphRead；其他插件inject=['hugegraphRead']、peerDependency @software-factory/gateway ^0.1.1，并导入其/types。
+- 包：@software-factory/gateway 0.1.3，目标DSH 0.2.1-alpha.2（含组件配置表单与volatile配置支持）；查询API保持1.0。
+- 后端服务：hugegraphRead；其他插件inject=['hugegraphRead']、peerDependency @software-factory/gateway ^0.1.2，并导入其/types。
 - Remote：hugegraphRead/health、hugegraphRead/read、hugegraphRead/snapshot；使用DSH认证Connection、生成的严格Typert描述符，取消信号由宿主注入。导出/remote；本包提供无页面Client桥，消费者不重复mount。
 - Tool：hugegraph_read；严格action联合：{action:'health'}、{action:'snapshot',options:{}}、{action:'read',query:{kind:...}}。信号来自exec.signal，不接受审批/写入/连接参数。
 - 服务：health(signal?)、snapshot(options,signal?)、read(query,signal?)；apiVersion='1.0'。不兼容旧服务snapshot(signal)。
 
-三个入口复用Reader和私有ReadClient。底层只有固定GET Schema、四类顶点、三类边源邻接；没有通用HTTP、Gremlin、CUD或写入授权通道。Remote还复核原始wire值，避免生成codec剥离未知字段后绕过参数拒绝。
+三个入口复用Reader和私有ReadClient。底层只有固定GET Schema、四类业务顶点、三类边源邻接及单独的固定公共配置节点；没有通用HTTP、Gremlin、CUD或写入授权通道。Remote还复核原始wire值，避免生成codec剥离未知字段后绕过参数拒绝。
 
 ## 参数
 
@@ -24,6 +24,7 @@
 | versions | agentId | version原文等值；detail=summary；分页 |
 | candidates | kind | capabilityId/keyword/status/developer/model{name,vendor?}；includeDescendants=true；detail=summary；分页 |
 | field_groups | kind | groupId；分页；完整原始元数据与JSON状态 |
+| factory_config | kind | 无；固定单节点，不分页，不接受节点ID、URL或路径 |
 
 全部kind必填；未知字段拒绝。非空字符串通常上限512字符，图ID4096，拒绝控制字符；总查询16KiB。树根默认唯一name=软件工厂，缺失/歧义报错。无能力筛选的列表在当前标签数据中查询。
 
@@ -33,7 +34,7 @@ agentId=Agent.agent_id；vertexId是数据库实际顶点ID；version是业务�
 
 | 参数 | 类型 | 默认/限制与适用范围 |
 |---|---|---|
-| kind | 六种白名单字符串 | read必填；不是Tool名字 |
+| kind | 七种白名单字符串 | read必填；不是Tool名字 |
 | rootCapabilityId | string | snapshot/capability_tree可选，使用实际Capability顶点ID；省略查唯一“软件工厂” |
 | includeVersions | boolean | 仅snapshot，默认false |
 | maxDepth | integer | 图接口默认8，范围0..16，只计HAS_CHILD层级 |
@@ -120,7 +121,14 @@ interface GraphSnapshot {
   rootCapabilityId: string; nodes: NodeView[]; edges: ReadEdge[];
   stats: { nodes: number; edges: number; byLabel: Record<string, number>; scope: 'returned' };
 }
-type ReadData = GraphSnapshot
+type FactoryConfigData = {
+  kind: 'factory_config'; vertexId: 'config:software-factory'; label: 'FactoryConfig';
+} & (
+  | { state: 'configured'; datasetRoot: string; locationKind: 'local' | 'http' | 'https' }
+  | { state: 'missing'; missing: 'schema' | 'node' | 'dataset_root' }
+  | { state: 'invalid'; diagnostic: { code: string; message: string } }
+);
+type ReadData = GraphSnapshot | FactoryConfigData
   | { kind: 'node'; node: NodeView; relations: ReadEdge[]; neighbors: NodeView[]; page: Page }
   | { kind: 'agents' | 'versions' | 'field_groups'; items: NodeView[]; page: Page }
   | { kind: 'candidates'; items: { agent: NodeView; version: NodeView }[]; page: Page };
@@ -142,9 +150,9 @@ node合并一跳双向边、按边ID去重排序后统一分页；neighbors只�
 
 错误code采用INVALID_INPUT/CONFIG/NOT_FOUND/SCHEMA/DATABASE/LIMIT/BUSY/TIMEOUT/CANCELLED/DATA_CHANGED。禁止回显HTTP错误正文、凭据、Authorization和私密路径。停用撤销入口并中止请求，升级不改数据库。
 
-0.1.1配置：数据库连接五项统一由插件目录.env读取（HUGEGRAPH_BASE_URL、HUGEGRAPH_GRAPHSPACE、HUGEGRAPH_GRAPH、HUGEGRAPH_USERNAME、HUGEGRAPH_PASSWORD）。普通DSH Config仅含envFile（默认.env，相对实际安装目录）、timeoutMs/requestTimeoutMs/maxConcurrent；不再使用旧baseUrl/graphSpace/graph/credentialsFile覆盖项，也不回退到系统环境或旧JSON凭据。真实.env仅由用户本地填写，Git和发布包均排除；包内只含空白账号密码的.env.example。没有模型依赖或模型选择设置。
+0.1.2配置位于“插件 → 插件包 → 包含的组件 → 软件工厂 HugeGraph 只读网关”的DSH原生组件表单，Bundle外层不提供重复表单。字段为baseUrl（默认http://127.0.0.1:18080）、graphSpace（DEFAULT）、graph（hugegraph）、username、password，以及timeoutMs（30000，100..60000）、requestTimeoutMs（10000，100..20000）、maxConcurrent（4，1..8），数值为整数。用户名和密码必填；密码使用role=secret，由DSH设置接口脱敏，不表示加密存储。表单和手工编辑使用同一份生效组件配置，不添加dataset_root、datasets_json或模型选择配置。
 
-.env支持单行值、注释、单/双引号，不执行变量/命令；文件缺失、不可读取、超过16 KiB、编码异常、空值、重复/未知键返回脱敏CONFIG。只在后端读取，不检查文件或父目录的ACL、所有者及权限模式，不调用权限检查或修复脚本，也不改变实际文件权限。重新启用时重读，升级由用户备份/保留.env，不自动迁移。
+不再读取.env、系统环境或旧JSON凭据文件，不导入、不删除旧配置；安装包不含任何.env文件或示例。配置缺失或非法时health返回ready=false及脱敏CONFIG诊断。字段声明volatile；DSH成功应用配置后，下一次调用比较当前值，取消旧Reader请求并重建连接，非法新配置不会继续使用旧连接。手工文件修改需被DSH加载；未启用热重载时需重启。账号密码不进入业务返回、Tool描述、浏览器桥或日志。
 
 发布ZIP预置编译产物，使用者无需编译或手工npm install，仍需兼容DSH，依赖解析由宿主插件管理器处理，未承诺完全离线。独立包不依赖重构仓库node_modules或contracts源码。具体配置、启动和安装示例见packages/gateway/README.md。
 
@@ -152,5 +160,60 @@ node合并一跳双向边、按边ID去重排序后统一分页；neighbors只�
 
 已实施核心模拟与隔离宿主服务测试，覆盖真实Tool链/严格Remote调度，不使用实际profile。网页安装、真实数据库及认证端到端需另行验证。配置、依赖和共享类型变动详见docs/coordination/gateway.md，不自动通知其他会话。
 
-2026-10-30数据库已追加可选AgentVersion.description（TEXT/SINGLE，nullable），复用description PropertyKey。当前八类19项，其中functionality.version_description按storage.vertex_label=AgentVersion、property=description绑定，display_order=15；原agent_capability保留。API版本仍为1.0，无Schema迁移或数据库写入。FieldGroup数量偏差只诊断，不作为读取字段数量上限。
+2026-10-30数据库已追加可选AgentVersion.description（TEXT/SINGLE，nullable），复用description PropertyKey。其中functionality.version_description按storage.vertex_label=AgentVersion、property=description绑定，display_order=15；原agent_capability保留。2026-11-17再追加datasets_json及FactoryConfig.dataset_root，目前八类20项、23个PropertyKey、5种顶点标签，三类关系不变。Gateway不迁移Schema；FieldGroup按实际数组读取，不设固定字段数量门槛。普通业务图仍只有原四种标签，公共配置单独读取。
 编排消费者应读取候选full详情，分别使用agent逻辑背景与version独立描述；版本缺省不得以逻辑描述替代。仓库尚无orchestration实现，本次不新增该模块。
+
+## 数据集与公共配置（0.1.2）
+
+`AgentVersion.datasets_json` 是可选TEXT/SINGLE。完整版本详情的 `properties.datasets_json` 保留原文，`jsonFields.datasets_json` 为missing、parsed或invalid；缺省时属性省略、missingFields列出字段，不自动补成空串或[]。合法空数组是parsed。合法JSON但结构不符仍保留解析值，并添加JSON_SHAPE警告，不篡改原值。
+
+结构为数组，每项有非空name，可含local_path和source_url，至少填写一处位置，也可同时填写。以下仅为接口示例：
+
+```json
+[{"name":"示例数据集","local_path":"example/input.json","source_url":"https://example.org/datasets/input.json"}]
+```
+
+摘要不返回数据集资料；node、field_groups为完整详情，versions/candidates及snapshot需要detail=full。候选关键词范围在已有逻辑及版本描述、版本号、开发人员、入口、模型、处理对象类别之上增加数据集name；不匹配local_path/source_url，也不拼接dataset_root。JSON错误影响关键词判定时明确complete=false、unknownCount和警告；详情诊断不等于截断。普通Agent关键词仍只查逻辑Agent字段。
+
+`read({kind:'factory_config'})`只读取固定公共节点，先GET Schema确认FactoryConfig允许TEXT/SINGLE的dataset_root，再GET `/graph/vertices/` 加 `encodeURIComponent(JSON.stringify('config:software-factory'))`。没有任意ID、标签、REST路径或请求体参数。只返回dataset_root相关信息，其他配置属性丢弃。此查询共用原连接、限流、超时、取消、响应大小限制及认证；最多两个固定GET，无自动重试。
+
+- configured：原值datasetRoot和locationKind（local/http/https）。只作词法判断；不检查存在性、可访问性或下载成功。
+- missing：Schema没有FactoryConfig标签、节点GET返回404、属性缺省分别为schema/node/dataset_root；属于明确的未配置结果，ok=true。
+- invalid：Schema绑定/类型错误、节点身份错误、根位置格式非法，返回诊断并添加警告；不冒充未配置。根位置拒绝相对路径、非HTTP(S)协议和带用户信息、查询串或片段的URL。
+- 连接错误、权限拒绝、超时等仍为ok=false，不将HTTP401/403等当作未配置。业务health只检查原业务Schema，不以公共配置是否填写决定ready。
+
+FactoryConfig不加入能力树、snapshot、通用node/四类业务扫描。公共配置缺失不阻断普通查询。Gateway不访问文件系统、不请求这些数据集URL、不下载、不创建目录、不解析相对路径来实际访问；实际使用的后端负责边界校验。数据库记录应只含公共位置，不存储账号、令牌或签名密钥。Manage本轮未修改。
+
+## 调用示例
+
+后端插件（依赖声明见上文）：
+
+```ts
+import type { Context } from '@deepseek-ai/cordis';
+import type { HugeGraphReadService } from '@software-factory/gateway/types';
+export async function inspect(ctx: Context, signal?: AbortSignal) {
+  const gateway: HugeGraphReadService = ctx.hugegraphRead;
+  const config = await gateway.read({ kind: 'factory_config' }, signal);
+  if (config.ok && 'kind' in config.data && config.data.kind === 'factory_config') {
+    if (config.data.state === 'configured') console.log(config.data.locationKind);
+    // missing与invalid按各自状态处理，勿补造根目录。
+  }
+  return gateway.read({ kind: 'versions', agentId: 'agent:example', detail: 'full', limit: 20 }, signal);
+}
+```
+
+网页Remote需使用宿主认证连接，Gateway自带Client桥已经挂载：
+
+```ts
+import type {} from '@software-factory/gateway/remote';
+const result = await ctx.remote.hugegraphRead.read({ kind: 'factory_config' });
+if (result.ok && result.value.ok) {
+  const data = result.value.data; // 检查factory_config及state
+}
+```
+
+Tool传递同一查询，不接收数据库连接参数：
+
+```json
+{"action":"read","query":{"kind":"factory_config"}}
+```

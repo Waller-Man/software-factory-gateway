@@ -28,6 +28,8 @@ export async function prepare() {
   }
   for (const [name, directory] of [['cordis','cordis'], ['schemastery','schemastery'], ['cordis-plugin-loader','loader'], ['cordis-plugin-include','include'], ['cordis-plugin-timer','timer']]) await link('@deepseek-ai/' + name, join(host, 'vendor', directory));
   for (const name of ['typescript', '@types/node', 'zod']) await link(name, dirname(hostRequire.resolve(name + '/package.json')));
+  const uiRequire = createRequire(join(host, 'packages/client/ui-primitives/package.json'));
+  for (const name of ['react', '@types/react']) await link(name, dirname(uiRequire.resolve(name + '/package.json')));
   await link('@software-factory/contracts', join(root, 'packages/contracts'));
   await link('@software-factory/gateway', gateway);
 }

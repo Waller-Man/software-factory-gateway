@@ -1,6 +1,6 @@
 /** Build first. Generates a runtime-only ZIP; never reads a real .env. */
 import { copyFile, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { gateway, root } from './dev.mjs';
@@ -19,17 +19,23 @@ const files = entries.map(e => e.name), npmFiles = metadata.files.map(e => e.pat
 if (JSON.stringify([...files].sort()) !== JSON.stringify([...npmFiles].sort())) throw new Error('Tar entries differ from npm file list');
 for (const path of files) {
   if (/(^|\/)(node_modules|src|tests?|artifacts)(\/|$)|(^|\/)credentials\.json$|\.private\.|\.tsbuildinfo$/.test(path)) throw new Error('Forbidden package content');
-  if (/(^|\/)\.env(?:\..*)?$/.test(path) && path !== '.env.example') throw new Error('Private environment file included');
+  if (/(^|\/)\.env(?:\..*)?$/.test(path)) throw new Error('Environment file included');
 }
-const required = ['package.json', 'README.md', 'docs/gateway-api.md', 'THIRD_PARTY_NOTICES.md', '.env.example', 'lib/index.js', 'lib/client.js', 'lib/types.d.ts', 'lib/contracts/gateway.d.ts', 'lib/typert.host.js', 'lib/typert.remote-client.js', 'cordis.patch.yml', 'locale/zh.json', 'locale/en.json', 'icon.svg'];
+const required = ['package.json', 'README.md', 'docs/gateway-api.md', 'THIRD_PARTY_NOTICES.md', 'lib/index.js', 'lib/client.js', 'lib/types.d.ts', 'lib/contracts/gateway.d.ts', 'lib/typert.host.js', 'lib/typert.remote-client.js', 'cordis.patch.yml', 'locale/zh.json', 'locale/en.json', 'icon.svg'];
 for (const path of required) if (!files.includes(path)) throw new Error('Package file missing: ' + path);
-const example = entries.find(e => e.name === '.env.example').data.toString('utf8');
-for (const key of ['HUGEGRAPH_USERNAME', 'HUGEGRAPH_PASSWORD']) if (!new RegExp('^' + key + '=$', 'm').test(example)) throw new Error('Non-empty credential example');
+// Public declarations must resolve using shipped files, without source/lib leftovers.
+for (const entry of entries.filter(entry => entry.name.endsWith('.d.ts'))) {
+  for (const match of entry.data.toString('utf8').matchAll(/from\s+['"](\.[^'"]+)['"]/g)) {
+    const target = posix.normalize(posix.join(posix.dirname(entry.name), match[1]));
+    if (!files.includes(target) && !files.includes(target.replace(/\.js$/, '.d.ts'))) throw new Error('Unshipped declaration dependency: ' + target);
+  }
+}
 const manifestEntry = entries.find(e => e.name === 'package.json'), manifest = JSON.parse(manifestEntry.data.toString('utf8'));
 if (manifest.scripts?.preinstall || manifest.scripts?.install || manifest.scripts?.postinstall) throw new Error('Unexpected install script');
 delete manifest.scripts; delete manifest.devDependencies; delete manifest.workspaces;
 manifestEntry.data = Buffer.from(JSON.stringify(manifest, null, 2) + '\n');
 const prefix = 'software-factory-gateway', releaseDir = join(artifacts, 'release', prefix);
+await rm(join(releaseDir, '.env.example'), { force: true });
 for (const name of ['check-env-acl.ps1', 'protect-env.ps1']) await rm(join(releaseDir, 'scripts', name), { force: true });
 for (const entry of entries) { const output = join(releaseDir, entry.name); await mkdir(dirname(output), { recursive: true }); await writeFile(output, entry.data); }
 // Only verified entries are zipped. User-added release files, especially .env,

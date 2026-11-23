@@ -1,5 +1,6 @@
 /** No method/body/path passthrough, no writer, and no Gremlin implementation. */
-import type { Json, ReadEdge, ReadVertex, VertexLabel, EdgeLabel } from './types.ts';
+import type { Json, ReadEdge, ReadVertex, VertexLabel, EdgeLabel, FactoryConfigData } from './types.ts';
+import { FACTORY_CONFIG_ID, missingFactoryConfig, invalidFactoryConfig, factoryConfigValue } from './factory-config.ts';
 import { edgeTypes, properties, verifySchema } from './schema.ts';
 import { GatewayError, requireThat } from './validation.ts';
 
@@ -7,7 +8,7 @@ export interface Connection { baseUrl: string; graph: string; graphSpace?: strin
 export interface Limits { requestTimeoutMs: number; maxRequests: number; maxScanNodes: number; maxScanEdges: number; maxScanBytes: number }
 export const defaultLimits: Limits = { requestTimeoutMs: 10000, maxRequests: 256, maxScanNodes: 2000, maxScanEdges: 5000, maxScanBytes: 8 * 1024 * 1024 };
 export interface GraphState { vertices: ReadVertex[]; edges: ReadEdge[] }
-export interface ReadTransport { schema(signal: AbortSignal): Promise<void>; scan(signal: AbortSignal, includeVersions?: boolean): Promise<GraphState>; dispose(): void }
+export interface ReadTransport { schema(signal: AbortSignal): Promise<void>; scan(signal: AbortSignal, includeVersions?: boolean): Promise<GraphState>; factoryConfig(signal: AbortSignal): Promise<FactoryConfigData>; dispose(): void }
 
 export class ReadClient implements ReadTransport {
   #base: string;
@@ -22,7 +23,7 @@ export class ReadClient implements ReadTransport {
     this.#authorization = 'Basic ' + Buffer.from(config.username + ':' + config.password).toString('base64');
   }
   dispose(): void { this.#authorization = ''; }
-  private async get(path: string, signal: AbortSignal, budget: { requests: number; bytes: number }): Promise<Record<string, unknown>> {
+  private async get(path: string, signal: AbortSignal, budget: { requests: number; bytes: number }, allowMissing = false): Promise<Record<string, unknown>> {
     signal.throwIfAborted();
     requireThat(this.#authorization, 'CANCELLED', 'Reader has been disposed');
     requireThat(++budget.requests <= this.limits.maxRequests, 'LIMIT', 'Database request budget exceeded; scan incomplete');
@@ -30,7 +31,7 @@ export class ReadClient implements ReadTransport {
     let response: Response;
     try { response = await this.fetcher(this.#base + path, { method: 'GET', headers: { Authorization: this.#authorization }, redirect: 'error', signal: requestSignal }); }
     catch { if (requestSignal.aborted) throw new GatewayError(requestSignal.reason?.name === 'TimeoutError' ? 'TIMEOUT' : 'CANCELLED', 'Database request did not complete'); throw new GatewayError('DATABASE', 'Cannot connect to configured database'); }
-    if (!response.ok) { await response.body?.cancel(); throw new GatewayError('DATABASE', `Database returned HTTP ${response.status}`); }
+    if (!response.ok) { await response.body?.cancel(); if (allowMissing && response.status === 404) throw new GatewayError('NOT_FOUND', 'Fixed public configuration node is absent'); throw new GatewayError('DATABASE', `Database returned HTTP ${response.status}`); }
     const reader = response.body?.getReader(); requireThat(reader, 'DATABASE', 'Missing database response');
     let bytes = 0; const chunks: Uint8Array[] = [];
     try {
@@ -47,6 +48,19 @@ export class ReadClient implements ReadTransport {
     return raw as Record<string, unknown>;
   }
   async schema(signal: AbortSignal): Promise<void> { verifySchema(await this.get('/schema', signal, { requests: 0, bytes: 0 })); }
+  async factoryConfig(signal: AbortSignal): Promise<FactoryConfigData> {
+    const budget = { requests: 0, bytes: 0 }, schema = await this.get('/schema', signal, budget);
+    requireThat(Array.isArray(schema.vertexlabels) && Array.isArray(schema.propertykeys), 'SCHEMA', 'Database Schema cannot be read');
+    const labels = (schema.vertexlabels as Record<string, unknown>[]).filter(v => v?.name === 'FactoryConfig');
+    if (!labels.length) return missingFactoryConfig('schema');
+    const keys = (schema.propertykeys as Record<string, unknown>[]).filter(v => v?.name === 'dataset_root');
+    if (labels.length !== 1 || !Array.isArray(labels[0]!.properties) || !labels[0]!.properties.includes('dataset_root') || keys.length !== 1 || keys[0]!.data_type !== 'TEXT' || keys[0]!.cardinality !== 'SINGLE') return invalidFactoryConfig();
+    let raw: Record<string, unknown>;
+    try { raw = await this.get('/graph/vertices/' + encodeURIComponent(JSON.stringify(FACTORY_CONFIG_ID)), signal, budget, true); }
+    catch (error) { if (error instanceof GatewayError && error.code === 'NOT_FOUND') return missingFactoryConfig('node'); throw error; }
+    if (raw.id !== FACTORY_CONFIG_ID || raw.label !== 'FactoryConfig' || !raw.properties || typeof raw.properties !== 'object' || Array.isArray(raw.properties)) return invalidFactoryConfig();
+    return factoryConfigValue((raw.properties as Record<string, unknown>).dataset_root);
+  }
   async scan(signal: AbortSignal, includeVersions = true): Promise<GraphState> {
     const budget = { requests: 0, bytes: 0 };
     verifySchema(await this.get('/schema', signal, budget));

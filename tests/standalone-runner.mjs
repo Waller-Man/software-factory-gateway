@@ -63,8 +63,9 @@ const ctx = new Context();
 try {
   await ctx.plugin(SystemPrompt); await ctx.plugin(Tools); await ctx.plugin(Registry); await ctx.plugin(ApiGateway, {});
   const unregister = ctx.typert.register(TYPERT);
-  const fiber = await ctx.plugin(Gateway, {});
-  const h = await ctx.hugegraphRead.health(); assert.ok(h.ok && h.data.ready, JSON.stringify(h)); assert.equal(h.data.gatewayVersion, '0.1.1');
+  const fiber = await ctx.plugin(Gateway, { baseUrl: 'http://127.0.0.1:18080', username: 'standalone-mock', password: 'synthetic-only' });
+  const h = await ctx.hugegraphRead.health(); assert.ok(h.ok && h.data.ready, JSON.stringify(h)); assert.equal(h.data.gatewayVersion, '0.1.3');
+  const config = await ctx.hugegraphRead.read({ kind: 'factory_config' }); assert.ok(config.ok && config.data.state === 'missing' && config.data.missing === 'schema');
   assert.deepEqual(ctx.tools.schemas().map(x => x.name), ['hugegraph_read']);
   const data = await ctx.tools.execute({ callId: 'standalone', name: 'hugegraph_read', arguments: { action: 'read', query: { kind: 'agents' } }, signal: new AbortController().signal });
   assert.equal(data.isError, false); assert.ok(data.value.ok); assert.equal(data.value.data.items.length, 0);

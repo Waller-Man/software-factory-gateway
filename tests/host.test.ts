@@ -2,10 +2,11 @@
  * No actual profile, browser cookie store, old plugin or business algorithm is touched. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Context } from '@deepseek-ai/cordis';
+import { Context, resolveConfig } from '@deepseek-ai/cordis';
+import Loader from '@deepseek-ai/cordis-plugin-loader';
 import Tools from '@deepseek-ai/dsh-tools';
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt';
 import Registry from '@deepseek-ai/dsh-typert-registry';
@@ -23,18 +24,14 @@ test('Bundle manifest and patch are accepted by the real DSH composition helpers
   const patches = bundlePatchPaths(packageRoot, manifest.dsh.bundle).flatMap(path => loadOverlayPatches('gateway-test', path));
   const rows = composeEntries([patches]);
   assert.equal(rows.length, 1); assert.equal(rows[0]!.name, manifest.name); assert.equal(rows[0]!.id, 'sf-hugegraph-read');
-  assert.equal((rows[0]!.config as any).envFile, '.env');
+  assert.deepEqual(rows[0]!.config, {});
   assert.ok(!Object.hasOwn(rows[0]!.config!, 'baseUrl'));
   assert.ok(!Object.hasOwn(rows[0]!.config!, 'password'));
   for (const lang of ['en', 'zh']) { const locale = JSON.parse(await readFile(join(packageRoot, 'locale/' + lang + '.json'), 'utf8')); assert.ok(locale.meta.title && locale.meta.description); }
 });
 test('compiled standard plugin registers exactly one Tool and three strict Remotes; unload and re-enable', async () => {
   const ctx = new Context(); const originalFetch = globalThis.fetch;
-  const resultRoot = resolve(packageRoot, '../../test-results'); await mkdir(resultRoot, { recursive: true });
-  const scratch = await mkdtemp(join(resultRoot, 'gateway-host-')), envFile = join(scratch, '.env');
   const mockCredentials = { username: 'integration-user', password: 'synthetic-integration-password' };
-  const envText = (): string => `HUGEGRAPH_BASE_URL=http://127.0.0.1:18080\nHUGEGRAPH_GRAPHSPACE=DEFAULT\nHUGEGRAPH_GRAPH=hugegraph\nHUGEGRAPH_USERNAME=${mockCredentials.username}\nHUGEGRAPH_PASSWORD=${mockCredentials.password}\n`;
-  await writeFile(envFile, envText(), { mode: 0o600 });
   let gets = 0, writes = 0;
   const rows = [{ id: 'root', label: 'Capability', properties: { name: '软件工厂' } }, { id: 'agent-native', label: 'Agent', properties: { agent_id: 'agent:integration', name: 'integration', description: 'synthetic data' } }];
   const schema = { vertexlabels: Object.entries(properties).map(([name, fields]) => ({ name, properties: fields })), propertykeys: [...new Set(Object.values(properties).flat())].map(name => ({ name, data_type: name === 'display_order' ? 'INT' : 'TEXT', cardinality: 'SINGLE' })), edgelabels: Object.entries(edgeTypes).map(([name, [source_label, target_label]]) => ({ name, source_label, target_label })) };
@@ -48,19 +45,21 @@ test('compiled standard plugin registers exactly one Tool and three strict Remot
   };
   try {
     await ctx.plugin(SystemPrompt); await ctx.plugin(Tools); await ctx.plugin(Registry); await ctx.plugin(ApiGateway, {});
+    await ctx.plugin(Loader); ctx.loader.builtins.gateway = Gateway;
     const definitions = ctx.typert.register(TYPERT as never);
     assert.deepEqual(remote.descriptors.map(d => d.namespace + '/' + d.method).sort(), ['hugegraphRead/health', 'hugegraphRead/read', 'hugegraphRead/snapshot']);
     assert.ok(remote.descriptors.every(d => d.cancellation?.parameter === 'signal'));
     for (let iteration = 0; iteration < 2; iteration++) {
-      if (iteration) { mockCredentials.password = 'rotated-synthetic-password'; await writeFile(envFile, envText()); }
-      const fiber = await ctx.plugin(Gateway, { envFile });
+      const config = { baseUrl: 'http://127.0.0.1:18080', graphSpace: 'DEFAULT', graph: 'hugegraph', ...mockCredentials };
+      const entryId = await ctx.loader.create({ id: 'test-read-' + iteration, name: 'cordis:gateway', config });
+      const entry = ctx.loader.resolve(entryId), fiber = entry.fiber!; await fiber.await();
       const health = await ctx.hugegraphRead.health(); assert.ok(health.ok && health.data.ready, JSON.stringify(health));
       assert.deepEqual(ctx.tools.schemas().map(t => t.name), ['hugegraph_read']);
       const read = await ctx.tools.execute({ callId: 'read-' + iteration, name: 'hugegraph_read', arguments: { action: 'read', query: { kind: 'agents' } }, signal: new AbortController().signal });
       assert.equal(read.isError, false, JSON.stringify(read)); assert.equal((read as any).value.data.items.length, 1);
       const fromRemote: any = await ctx.typertGateway.invoke({ namespace: 'hugegraphRead', method: 'read', args: { query: { kind: 'agents' } } });
       assert.ok(fromRemote.ok && fromRemote.data.items.length === 1, JSON.stringify(fromRemote));
-      for (const query of [{ kind: 'capability_tree' }, { kind: 'node', vertexId: 'root' }, { kind: 'versions', agentId: 'agent:integration' }, { kind: 'candidates' }, { kind: 'field_groups' }]) {
+      for (const query of [{ kind: 'capability_tree' }, { kind: 'node', vertexId: 'root' }, { kind: 'versions', agentId: 'agent:integration' }, { kind: 'candidates' }, { kind: 'field_groups' }, { kind: 'factory_config' }]) {
         const response: any = await ctx.typertGateway.invoke({ namespace: 'hugegraphRead', method: 'read', args: { query } });
         assert.ok(response.ok, JSON.stringify(response));
         const tool = await ctx.tools.execute({ callId: 'all-' + query.kind, name: 'hugegraph_read', arguments: { action: 'read', query }, signal: new AbortController().signal });
@@ -78,7 +77,23 @@ test('compiled standard plugin registers exactly one Tool and three strict Remot
       assert.equal(gets, before);
       const badTool = await ctx.tools.execute({ callId: 'bad-transport', name: 'hugegraph_read', arguments: { action: 'snapshot', options: { url: 'https://invalid.example' } }, signal: new AbortController().signal });
       assert.ok(badTool.isError || !(badTool as any).value.ok); assert.equal(gets, before);
-      const output = JSON.stringify([health, read, fromRemote]); assert.ok(!output.includes(mockCredentials.password) && !output.includes(envFile));
+      mockCredentials.password = 'rotated-' + iteration;
+      const next = { ...config, password: mockCredentials.password };
+      resolveConfig(fiber.runtime!, fiber.ctx.waterfall(fiber, 'internal/config', next, () => next));
+      await entry.update({ config: next }); await entry.fiber!.await();
+      assert.ok(Object.is(entry.fiber, fiber));
+      const updated = await ctx.hugegraphRead.health(); assert.ok(updated.ok && updated.data.ready, JSON.stringify(updated));
+      const updatedTool = await ctx.tools.execute({ callId: 'updated', name: 'hugegraph_read', arguments: { action: 'health' }, signal: new AbortController().signal });
+      assert.ok((updatedTool as any).value.data.ready);
+      const updatedRemote: any = await ctx.typertGateway.invoke({ namespace: 'hugegraphRead', method: 'read', args: { query: { kind: 'factory_config' } } });
+      assert.ok(updatedRemote.ok && updatedRemote.data.state === 'missing');
+      const beforeInvalid = gets;
+      await entry.update({ config: { ...next, password: '' } }); await entry.fiber!.await();
+      const invalid = await ctx.hugegraphRead.health(); assert.ok(invalid.ok && !invalid.data.ready && invalid.data.diagnostic?.code === 'CONFIG');
+      assert.equal(gets, beforeInvalid); // No stale old connection or env fallback.
+      await entry.update({ config: next }); await entry.fiber!.await();
+      const restored = await ctx.hugegraphRead.health(); assert.ok(restored.ok && restored.data.ready);
+      const output = JSON.stringify([health, read, fromRemote, updated]); assert.ok(!output.includes(mockCredentials.password));
       await fiber.dispose(); assert.equal(ctx.get('hugegraphRead'), undefined); assert.deepEqual(ctx.tools.schemas().map(t => t.name), []);
       await assert.rejects(ctx.typertGateway.invoke({ namespace: 'hugegraphRead', method: 'health', args: {} }));
     }

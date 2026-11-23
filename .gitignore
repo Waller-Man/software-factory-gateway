@@ -1,7 +1,6 @@
 # Local database configuration and credentials
 .env
 .env.*
-!.env.example
 credentials.json
 credentials.*.json
 *.private.json
